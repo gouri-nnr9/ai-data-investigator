@@ -1,17 +1,27 @@
 import re
+from typing import Any
 
 from database import get_connection
 
 
-def get_schema():
+def get_schema() -> dict[str, list[dict[str, str]]]:
+    """
+    Return the public database schema.
+
+    The agent uses this to understand:
+    - which tables exist
+    - which columns exist
+    - the data types of those columns
+    """
+
     query = """
-    SELECT
-        table_name,
-        column_name,
-        data_type
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-    ORDER BY table_name, ordinal_position;
+        SELECT
+            table_name,
+            column_name,
+            data_type
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+        ORDER BY table_name, ordinal_position;
     """
 
     conn = get_connection()
@@ -21,13 +31,15 @@ def get_schema():
             cur.execute(query)
             rows = cur.fetchall()
 
-        schema = {}
+        schema: dict[str, list[dict[str, str]]] = {}
 
         for table_name, column_name, data_type in rows:
-            schema.setdefault(table_name, []).append({
-                "column": column_name,
-                "type": data_type,
-            })
+            schema.setdefault(table_name, []).append(
+                {
+                    "column": column_name,
+                    "type": data_type,
+                }
+            )
 
         return schema
 
@@ -35,26 +47,32 @@ def get_schema():
         conn.close()
 
 
-def run_readonly_sql(query: str):
+def run_readonly_sql(query: str) -> dict[str, Any]:
     """
-    Execute SELECT-only SQL.
+    Execute a read-only SQL query.
+
+    Only SELECT/WITH queries are allowed.
+    The database is never modified through this tool.
     """
 
     cleaned = query.strip()
 
-    # Must start with SELECT or WITH.
+    if not cleaned:
+        raise ValueError("SQL query cannot be empty.")
+
+    # Allow SELECT and CTE queries.
     if not re.match(r"^(SELECT|WITH)\b", cleaned, re.IGNORECASE):
         raise ValueError(
-            "Only SELECT queries are allowed."
+            "Only SELECT or WITH queries are allowed."
         )
 
-    # Prevent multiple statements.
+    # Only one SQL statement.
     if ";" in cleaned.rstrip(";"):
         raise ValueError(
             "Multiple SQL statements are not allowed."
         )
 
-    forbidden = [
+    forbidden_keywords = [
         "INSERT",
         "UPDATE",
         "DELETE",
@@ -68,7 +86,7 @@ def run_readonly_sql(query: str):
 
     upper_query = cleaned.upper()
 
-    for keyword in forbidden:
+    for keyword in forbidden_keywords:
         if re.search(rf"\b{keyword}\b", upper_query):
             raise ValueError(
                 f"Forbidden SQL operation: {keyword}"
